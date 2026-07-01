@@ -94,3 +94,43 @@ bot.on('photo', async (ctx) => {
         ])
       });
     } catch (e) {
+      console.error('Could not notify admin', adminId, e.message);
+    }
+  }
+});
+
+bot.command('balance', (ctx) => {
+  const user = getOrCreateUser(ctx);
+  ctx.reply(`💰 Your balance: ${user.balance}`);
+});
+
+bot.command('withdraw', (ctx) => {
+  const user = getOrCreateUser(ctx);
+  if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
+  db.prepare('INSERT INTO withdrawals (user_id, amount) VALUES (?, ?)').run(user.id, user.balance);
+  ctx.reply(`Withdrawal request for ${user.balance} submitted. You'll be paid once approved.`);
+
+  for (const adminId of ADMIN_IDS) {
+    ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${user.balance}\nUse /withdrawals to review.`).catch(() => {});
+  }
+});
+bot.command('addtask', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  pendingTaskCreation.set(ctx.from.id, { step: 'title' });
+  ctx.reply('Let\'s create a task. Send the task TITLE:');
+});
+
+bot.on('text', (ctx, next) => {
+  const state = pendingTaskCreation.get(ctx.from.id);
+  if (!state || !isAdmin(ctx)) return next();
+
+  const text = ctx.message.text.trim();
+
+  if (state.step === 'title') {
+    state.title = text;
+    state.step = 'description';
+    return ctx.reply('Send the task DESCRIPTION (instructions for the user):');
+  }
+  if (state.step === 'description') {
+    state.description = text;
+    
