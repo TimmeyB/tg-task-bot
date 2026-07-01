@@ -102,9 +102,7 @@ bot.on('photo', async (ctx) => {
 bot.command('balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
-});
-
-bot.command('withdraw', (ctx) => {
+  bot.command('withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
   db.prepare('INSERT INTO withdrawals (user_id, amount) VALUES (?, ?)').run(user.id, user.balance);
@@ -114,6 +112,7 @@ bot.command('withdraw', (ctx) => {
     ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${user.balance}\nUse /withdrawals to review.`).catch(() => {});
   }
 });
+
 bot.command('addtask', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   pendingTaskCreation.set(ctx.from.id, { step: 'title' });
@@ -133,4 +132,125 @@ bot.on('text', (ctx, next) => {
   }
   if (state.step === 'description') {
     state.description = text;
-    
+    state.step = 'reward';
+    return ctx.reply('Send the REWARD amount per completion (number only):');
+  }
+  if (state.step === 'reward') {
+    const reward = parseFloat(text);
+    if (isNaN(reward) || reward <= 0) return ctx.reply('Please send a valid positive number for the reward.');
+    state.reward = reward;
+    state.step = 'slots';
+    return ctx.reply('How many SLOTS (max number of people who can complete this)?');
+  }
+  if (state.step === 'slots') {
+    const slots = parseInt(text, 10);
+    if (isNaN(slots) || slots <= 0) return ctx.reply('Please send a valid positive whole number for slots.');
+    db.prepare('INSERT INTO tasks (title, description, reward, slots_total) VALUES (?, ?, ?, ?)')
+      .run(state.title, state.description, state.reward, slots);
+    pendingTaskCreation.delete(ctx.from.id);
+    return ctx.reply(`✅ Task created: "${state.title}" — reward ${state.reward} x ${slots} slots.`);
+  }
+});
+
+bot.command('pending', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const subs = db.prepare(`
+});
+SELECT submissions.id, tasks.title, users.username, users.telegram_id
+    FROM submissions
+    JOIN tasks ON submissions.task_id = tasks.id
+    JOIN users ON submissions.user_id = users.id
+    WHERE submissions.status = 'pending'
+    ORDER BY submissions.id ASC
+  `).all();
+
+  if (subs.length === 0) return ctx.reply('No pending submissions.');
+  subs.forEach(s => {
+    ctx.reply(
+      `#${s.id} — ${s.title} — @${s.username}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('✅ Approve', `approve_${s.id}`),
+        Markup.button.callback('❌ Reject', `reject_${s.id}`)
+      ])
+    );
+  });
+});
+
+bot.action(/approve_(\d+)/, async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+  const subId = Number(ctx.match[1]);
+  const sub = db.prepare('SELECT * FROM submissions WHERE id = ?').get(subId);
+  if (!sub || sub.status !== 'pending') return ctx.answerCbQuery('Already handled.');
+
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(sub.task_id);
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(sub.user_id);
+
+  db.prepare('UPDATE submissions SET status = ? WHERE id = ?').run('approved', subId);
+  db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?').run(task.reward, user.id);
+  db.prepare('UPDATE tasks SET slots_filled = slots_filled + 1 WHERE id = ?').run(task.id);
+
+  const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id);
+  if (updatedTask.slots_filled >= updatedTask.slots_total) {
+    db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('closed', task.id);
+  }
+
+  ctx.answerCbQuery('Approved!');
+  ctx.editMessageReplyMarkup();
+  ctx.telegram.sendMessage(user.telegram_id, `✅ Your submission for "${task.title}" was approved! +${task.reward} added to your balance.`).catch(() => {});
+});
+
+bot.action(/reject_(\d+)/, async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+  const subId = Number(ctx.match[1]);
+  const sub = db.prepare('SELECT * FROM submissions WHERE id = ?').get(subId);
+  if (!sub || sub.status !== 'pending') return ctx.answerCbQuery('Already handled.');
+
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(sub.task_id);
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(sub.user_id);
+
+  db.prepare('UPDATE submissions SET status = ? WHERE id = ?').run('rejected', subId);
+  ctx.answerCbQuery('Rejected.');
+  ctx.editMessageReplyMarkup();
+  ctx.telegram.sendMessage(user.telegram_id, `❌ Your submission for "${task.title}" was rejected. Try another task!`).catch(() => {});
+});
+
+bot.command('withdrawals', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const reqs = db.prepare(`
+    SELECT withdrawals.id, withdrawals.amount, users.username, users.telegram_id
+    FROM withdrawals JOIN users ON withdrawals.user_id = users.id
+    WHERE withdrawals.status = 'pending'
+    ORDER BY withdrawals.id ASC
+  `).all();
+  if (reqs.length === 0) return ctx.reply('No pending withdrawals.');
+  reqs.forEach(r => {
+    ctx.reply(
+      `#${r.id} — @${r.username} — ${r.amount}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('✅ Mark Paid', `paid_${r.id}`),
+      ])
+    );
+  });
+});
+
+bot.action(/paid_(\d+)/, async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+  const reqId = Number(ctx.match[1]);
+  const req = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(reqId);
+  if (!req || req.status !== 'pending') return ctx.answerCbQuery('Already handled.');
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user_id);
+  db.prepare('UPDATE withdrawals SET status = ? WHERE id = ?').run('paid', reqId);
+  db.prepare('UPDATE users SET balance = balance - ? WHERE id = ?').run(req.amount, user.id);
+
+  ctx.answerCbQuery('Marked as paid.');
+  ctx.editMessageReplyMarkup();
+  ctx.telegram.sendMessage(user.telegram_id, `💸 Your withdrawal of ${req.amount} has been paid!`).catch(() => {});
+});
+
+bot.launch();
+console.log('Bot is running...');
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+  
