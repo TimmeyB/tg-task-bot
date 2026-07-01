@@ -102,6 +102,7 @@ bot.on('photo', async (ctx) => {
 bot.command('balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
+  });
   bot.command('withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
@@ -155,7 +156,7 @@ bot.on('text', (ctx, next) => {
 bot.command('pending', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   const subs = db.prepare(`
-});
+
 SELECT submissions.id, tasks.title, users.username, users.telegram_id
     FROM submissions
     JOIN tasks ON submissions.task_id = tasks.id
