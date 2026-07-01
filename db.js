@@ -38,10 +38,10 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
   amount REAL NOT NULL,
-  status TEXT DEFAULT 'pending',
+  wallet_address TEXT,
+  status TEXT DEFAULT 'pending', -- pending | paid | rejected
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
-`);
 
 module.exports = db;
