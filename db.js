@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   status TEXT DEFAULT 'pending', -- pending | paid | rejected
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (user_id) REFERENCES users(id)
+  );
 `);
 
 module.exports = db;
