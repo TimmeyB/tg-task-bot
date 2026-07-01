@@ -45,4 +45,10 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   );
 `);
 
+try {
+  db.exec('ALTER TABLE withdrawals ADD COLUMN wallet_address TEXT');
+} catch (e) {
+  // column already exists, ignore
+}
+
 module.exports = db;
