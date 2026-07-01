@@ -33,11 +33,12 @@ const pendingTaskCreation = new Map();
 bot.start((ctx) => {
   getOrCreateUser(ctx);
   ctx.reply(
-    `Welcome ${ctx.from.first_name}! 👋\n\nThis bot lets you earn money completing simple tasks.\n\n` +
-    `/tasks - see available tasks\n` +
-    `/balance - check your balance\n` +
-    `/withdraw - request a payout\n` +
-    (isAdmin(ctx) ? `\nAdmin commands:\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests` : '')
+    `Welcome ${ctx.from.first_name}! 👋\n\nThis bot lets you earn money completing simple tasks.\n\nTap a button below anytime.` +
+    (isAdmin(ctx) ? `\n\nAdmin commands:\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests` : ''),
+    Markup.keyboard([
+      ['📋 Tasks', '💰 Balance'],
+      ['💸 Withdraw']
+    ]).resize()
   );
 });
 
@@ -247,6 +248,32 @@ bot.action(/paid_(\d+)/, async (ctx) => {
   ctx.answerCbQuery('Marked as paid.');
   ctx.editMessageReplyMarkup();
   ctx.telegram.sendMessage(user.telegram_id, `💸 Your withdrawal of ${req.amount} has been paid!`).catch(() => {});
+});
+bot.hears('📋 Tasks', (ctx) => {
+  const tasks = db.prepare(`SELECT * FROM tasks WHERE status = 'open' AND slots_filled < slots_total ORDER BY id DESC`).all();
+  if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
+  tasks.forEach(task => {
+    const slotsLeft = task.slots_total - task.slots_filled;
+    ctx.reply(
+      `📋 *${task.title}*\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
+      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([Markup.button.callback('✅ Do this task', `dotask_${task.id}`)]) }
+    );
+  });
+});
+
+bot.hears('💰 Balance', (ctx) => {
+  const user = getOrCreateUser(ctx);
+  ctx.reply(`💰 Your balance: ${user.balance}`);
+});
+
+bot.hears('💸 Withdraw', (ctx) => {
+  const user = getOrCreateUser(ctx);
+  if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
+  db.prepare('INSERT INTO withdrawals (user_id, amount) VALUES (?, ?)').run(user.id, user.balance);
+  ctx.reply(`Withdrawal request for ${user.balance} submitted. You'll be paid once approved.`);
+  for (const adminId of ADMIN_IDS) {
+    ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${user.balance}\nUse /withdrawals to review.`).catch(() => {});
+  }
 });
 
 bot.launch();
