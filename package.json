@@ -1,0 +1,14 @@
+{
+  "name": "tg-task-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot that pays users for completing tasks, with admin approval flow.",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5"
+  }
+}
