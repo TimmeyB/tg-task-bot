@@ -29,6 +29,7 @@ function getOrCreateUser(ctx) {
 
 const pendingSubmission = new Map();
 const pendingTaskCreation = new Map();
+const pendingWithdrawal = new Map();
 
 bot.start((ctx) => {
   getOrCreateUser(ctx);
@@ -59,18 +60,21 @@ bot.command('tasks', (ctx) => {
     );
   });
 });
-
 bot.action(/dotask_(\d+)/, (ctx) => {
   const taskId = Number(ctx.match[1]);
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task || task.status !== 'open' || task.slots_filled >= task.slots_total) {
     return ctx.answerCbQuery('This task is no longer available.');
   }
+  const user = getOrCreateUser(ctx);
+  const existing = db.prepare(`SELECT * FROM submissions WHERE task_id = ? AND user_id = ? AND status != 'rejected'`).get(taskId, user.id);
+  if (existing) {
+    return ctx.answerCbQuery('You already submitted this task.', { show_alert: true });
+  }
   pendingSubmission.set(ctx.from.id, taskId);
   ctx.answerCbQuery();
   ctx.reply(`Got it. Complete the task, then send me a screenshot as proof (just send the photo here).`);
 });
-
 bot.on('photo', async (ctx) => {
   const taskId = pendingSubmission.get(ctx.from.id);
   if (!taskId) return;
@@ -104,24 +108,30 @@ bot.command('balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
   });
-  bot.command('withdraw', (ctx) => {
+bot.command('withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
-  db.prepare('INSERT INTO withdrawals (user_id, amount) VALUES (?, ?)').run(user.id, user.balance);
-  ctx.reply(`Withdrawal request for ${user.balance} submitted. You'll be paid once approved.`);
-
-  for (const adminId of ADMIN_IDS) {
-    ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${user.balance}\nUse /withdrawals to review.`).catch(() => {});
-  }
+  pendingWithdrawal.set(ctx.from.id, true);
+  ctx.reply('Please send your Solana (SOL) wallet address to receive payment:');
 });
-
 bot.command('addtask', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   pendingTaskCreation.set(ctx.from.id, { step: 'title' });
   ctx.reply('Let\'s create a task. Send the task TITLE:');
 });
-
 bot.on('text', (ctx, next) => {
+  if (pendingWithdrawal.get(ctx.from.id)) {
+    const walletAddress = ctx.message.text.trim();
+    const user = getOrCreateUser(ctx);
+    pendingWithdrawal.delete(ctx.from.id);
+    db.prepare('INSERT INTO withdrawals (user_id, amount, wallet_address) VALUES (?, ?, ?)').run(user.id, user.balance, walletAddress);
+    ctx.reply(`Withdrawal request for ${user.balance} submitted to wallet ${walletAddress}. You'll be paid once approved.`);
+    for (const adminId of ADMIN_IDS) {
+      ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${user.balance}\nWallet: ${walletAddress}\nUse /withdrawals to review.`).catch(() => {});
+    }
+    return;
+  }
+
   const state = pendingTaskCreation.get(ctx.from.id);
   if (!state || !isAdmin(ctx)) return next();
 
@@ -215,11 +225,10 @@ bot.action(/reject_(\d+)/, async (ctx) => {
   ctx.editMessageReplyMarkup();
   ctx.telegram.sendMessage(user.telegram_id, `❌ Your submission for "${task.title}" was rejected. Try another task!`).catch(() => {});
 });
-
 bot.command('withdrawals', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   const reqs = db.prepare(`
-    SELECT withdrawals.id, withdrawals.amount, users.username, users.telegram_id
+    SELECT withdrawals.id, withdrawals.amount, withdrawals.wallet_address, users.username, users.telegram_id
     FROM withdrawals JOIN users ON withdrawals.user_id = users.id
     WHERE withdrawals.status = 'pending'
     ORDER BY withdrawals.id ASC
@@ -227,7 +236,7 @@ bot.command('withdrawals', (ctx) => {
   if (reqs.length === 0) return ctx.reply('No pending withdrawals.');
   reqs.forEach(r => {
     ctx.reply(
-      `#${r.id} — @${r.username} — ${r.amount}`,
+      `#${r.id} — @${r.username} — ${r.amount}\nWallet: ${r.wallet_address || 'N/A'}`,
       Markup.inlineKeyboard([
         Markup.button.callback('✅ Mark Paid', `paid_${r.id}`),
       ])
@@ -265,15 +274,11 @@ bot.hears('💰 Balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
 });
-
 bot.hears('💸 Withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
-  db.prepare('INSERT INTO withdrawals (user_id, amount) VALUES (?, ?)').run(user.id, user.balance);
-  ctx.reply(`Withdrawal request for ${user.balance} submitted. You'll be paid once approved.`);
-  for (const adminId of ADMIN_IDS) {
-    ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${user.balance}\nUse /withdrawals to review.`).catch(() => {});
-  }
+  pendingWithdrawal.set(ctx.from.id, true);
+  ctx.reply('Please send your Solana (SOL) wallet address to receive payment:');
 });
 
 bot.launch();
