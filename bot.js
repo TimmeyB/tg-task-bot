@@ -52,15 +52,23 @@ function getOrCreateUserWithReferral(ctx) {
 bot.start((ctx) => {
   getOrCreateUserWithReferral(ctx);
   ctx.reply(
-    `Welcome ${ctx.from.first_name}! 👋\n\nThis bot lets you earn money completing simple tasks.\n\nTap a button below anytime.` +
+    `Welcome ${ctx.from.first_name}! 👋\n\nThis bot lets you earn money completing simple tasks.\n\nTap a button below anytime.\n\n💬 Join our community for updates & to connect with other users: https://t.me/+EEDVwNc2s345OGVk` +
     (isAdmin(ctx) ? `\n\nAdmin commands:\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests\n/broadcast - message all users` : ''),
     Markup.keyboard([
       ['📋 Tasks', '💰 Balance'],
-      ['💸 Withdraw', '🔗 Referral']
+      ['💸 Withdraw', '🔗 Referral'],
+      ['💬 Community', '🆘 Support']
     ]).resize()
   );
 });
 
+bot.hears('💬 Community', (ctx) => {
+  ctx.reply('Join our community here: https://t.me/+EEDVwNc2s345OGVk');
+});
+
+bot.hears('🆘 Support', (ctx) => {
+  ctx.reply('Having an issue? Message the admin directly: @Skiiddd');
+});
 bot.command('referral', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.telegram.getMe().then(me => {
