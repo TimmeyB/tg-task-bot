@@ -44,7 +44,13 @@ bot.start((ctx) => {
 });
 
 bot.command('tasks', (ctx) => {
-  const tasks = db.prepare(`SELECT * FROM tasks WHERE status = 'open' AND slots_filled < slots_total ORDER BY id DESC`).all();
+  const user = getOrCreateUser(ctx);
+  const tasks = db.prepare(`
+    SELECT * FROM tasks
+    WHERE status = 'open' AND slots_filled < slots_total
+    AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')
+    ORDER BY id DESC
+  `).all(user.id);
   if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
 
   tasks.forEach(task => {
@@ -259,7 +265,13 @@ bot.action(/paid_(\d+)/, async (ctx) => {
   ctx.telegram.sendMessage(user.telegram_id, `💸 Your withdrawal of ${req.amount} has been paid!`).catch(() => {});
 });
 bot.hears('📋 Tasks', (ctx) => {
-  const tasks = db.prepare(`SELECT * FROM tasks WHERE status = 'open' AND slots_filled < slots_total ORDER BY id DESC`).all();
+  const user = getOrCreateUser(ctx);
+  const tasks = db.prepare(`
+    SELECT * FROM tasks
+    WHERE status = 'open' AND slots_filled < slots_total
+    AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')
+    ORDER BY id DESC
+  `).all(user.id);
   if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
   tasks.forEach(task => {
     const slotsLeft = task.slots_total - task.slots_filled;
