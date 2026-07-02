@@ -255,7 +255,6 @@ bot.command('broadcast', async (ctx) => {
   ctx.reply(`Broadcast sent to ${sent} users. Failed: ${failed}.`);
 });
 
-bot.command('withdrawals', (ctx) => {
 
 bot.command('withdrawals', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
@@ -331,7 +330,6 @@ setInterval(() => {
 
 bot.launch();
 
-bot.launch();
 console.log('Bot is running...');
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
