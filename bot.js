@@ -236,6 +236,27 @@ bot.action(/reject_(\d+)/, async (ctx) => {
   ctx.editMessageReplyMarkup();
   ctx.telegram.sendMessage(user.telegram_id, `❌ Your submission for "${task.title}" was rejected. Try another task!`).catch(() => {});
 });
+bot.command('broadcast', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const message = ctx.message.text.replace('/broadcast', '').trim();
+  if (!message) return ctx.reply('Usage: /broadcast <your message>');
+
+  const users = db.prepare('SELECT telegram_id FROM users').all();
+  let sent = 0;
+  let failed = 0;
+  for (const u of users) {
+    try {
+      await bot.telegram.sendMessage(u.telegram_id, `📢 ${message}`);
+      sent++;
+    } catch (e) {
+      failed++;
+    }
+  }
+  ctx.reply(`Broadcast sent to ${sent} users. Failed: ${failed}.`);
+});
+
+bot.command('withdrawals', (ctx) => {
+
 bot.command('withdrawals', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   const reqs = db.prepare(`
