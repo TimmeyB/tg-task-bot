@@ -77,13 +77,18 @@ bot.action(/dotask_(\d+)/, (ctx) => {
   if (existing) {
     return ctx.answerCbQuery('You already submitted this task.', { show_alert: true });
   }
-  pendingSubmission.set(ctx.from.id, taskId);
+  pendingSubmission.set(ctx.from.id, { taskId, expiresAt: Date.now() + 2 * 60 * 60 * 1000 });
   ctx.answerCbQuery();
-  ctx.reply(`Got it. Complete the task, then send me a screenshot as proof (just send the photo here).`);
+  ctx.reply(`Got it. Complete the task, then send me a screenshot as proof (just send the photo here). You have 2 hours before this expires.`);
 });
 bot.on('photo', async (ctx) => {
-  const taskId = pendingSubmission.get(ctx.from.id);
-  if (!taskId) return;
+  const pending = pendingSubmission.get(ctx.from.id);
+  if (!pending) return;
+  if (Date.now() > pending.expiresAt) {
+    pendingSubmission.delete(ctx.from.id);
+    return ctx.reply('This task claim expired. Tap "Do this task" again to retry.');
+  }
+  const taskId = pending.taskId;
 
   const user = getOrCreateUser(ctx);
   const photo = ctx.message.photo[ctx.message.photo.length - 1];
@@ -292,6 +297,18 @@ bot.hears('💸 Withdraw', (ctx) => {
   pendingWithdrawal.set(ctx.from.id, true);
   ctx.reply('Please send your Solana (SOL) wallet address to receive payment:');
 });
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [telegramId, pending] of pendingSubmission.entries()) {
+    if (now > pending.expiresAt) {
+      pendingSubmission.delete(telegramId);
+      bot.telegram.sendMessage(telegramId, '⏰ Your task claim expired after 2 hours since no proof was submitted. Tap "Do this task" again if you still want to complete it.').catch(() => {});
+    }
+  }
+}, 5 * 60 * 1000);
+
+bot.launch();
 
 bot.launch();
 console.log('Bot is running...');
