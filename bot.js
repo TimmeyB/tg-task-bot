@@ -328,6 +328,52 @@ bot.command('broadcast', async (ctx) => {
   ctx.reply(`Broadcast sent to ${sent} users. Failed: ${failed}.`);
 });
 
+bot.command('alltasks', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const tasks = db.prepare('SELECT * FROM tasks ORDER BY id DESC').all();
+  if (tasks.length === 0) return ctx.reply('No tasks created yet.');
+
+  tasks.forEach(task => {
+    const slotsLeft = task.slots_total - task.slots_filled;
+    ctx.reply(
+      `#${task.id} — ${task.title}\nStatus: ${task.status}\nSlots: ${task.slots_filled}/${task.slots_total} (${slotsLeft} left)\nReward: ${task.reward}`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('🗑 Delete this task', `deltask_${task.id}`)
+      ])
+    );
+  });
+});
+
+bot.action(/deltask_(\d+)/, (ctx) => {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+  const taskId = Number(ctx.match[1]);
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  if (!task) return ctx.answerCbQuery('Task not found or already deleted.');
+
+  db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('closed', taskId);
+  ctx.answerCbQuery('Task closed.');
+  ctx.editMessageReplyMarkup();
+  ctx.reply(`✅ Task "${task.title}" has been closed and removed from active listings.`);
+});
+
+bot.command('users', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const users = db.prepare('SELECT telegram_id, username, balance FROM users ORDER BY id DESC').all();
+  if (users.length === 0) return ctx.reply('No users yet.');
+
+  let message = `👥 Total users: ${users.length}\n\n`;
+  users.forEach(u => {
+    message += `@${u.username} — id: ${u.telegram_id} — balance: ${u.balance}\n`;
+  });
+
+  if (message.length > 4000) {
+    const chunks = message.match(/[\s\S]{1,4000}/g);
+    chunks.forEach(chunk => ctx.reply(chunk));
+  } else {
+    ctx.reply(message);
+  }
+});
+
 
 bot.command('withdrawals', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
