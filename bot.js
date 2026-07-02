@@ -26,21 +26,73 @@ function getOrCreateUser(ctx) {
   }
   return user;
 }
-
 const pendingSubmission = new Map();
 const pendingTaskCreation = new Map();
 const pendingWithdrawal = new Map();
 
+function getOrCreateUserWithReferral(ctx) {
+  const tgId = ctx.from.id;
+  let user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(tgId);
+  if (!user) {
+    let referredBy = null;
+    const payload = ctx.startPayload;
+    if (payload && payload.startsWith('ref')) {
+      const refTelegramId = payload.replace('ref', '');
+      const refUser = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(refTelegramId);
+      if (refUser && String(refUser.telegram_id) !== String(tgId)) {
+        referredBy = refUser.telegram_id;
+      }
+    }
+    db.prepare('INSERT INTO users (telegram_id, username, referred_by) VALUES (?, ?, ?)')
+      .run(tgId, ctx.from.username || ctx.from.first_name || 'unknown', referredBy);
+    user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(tgId);
+  }
+  return user;
+}
 bot.start((ctx) => {
-  getOrCreateUser(ctx);
+  getOrCreateUserWithReferral(ctx);
   ctx.reply(
     `Welcome ${ctx.from.first_name}! 👋\n\nThis bot lets you earn money completing simple tasks.\n\nTap a button below anytime.` +
-    (isAdmin(ctx) ? `\n\nAdmin commands:\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests` : ''),
+    (isAdmin(ctx) ? `\n\nAdmin commands:\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests\n/broadcast - message all users` : ''),
     Markup.keyboard([
       ['📋 Tasks', '💰 Balance'],
-      ['💸 Withdraw']
+      ['💸 Withdraw', '🔗 Referral']
     ]).resize()
   );
+});
+
+bot.command('referral', (ctx) => {
+  const user = getOrCreateUser(ctx);
+  ctx.telegram.getMe().then(me => {
+    const link = `https://t.me/${me.username}?start=ref${user.telegram_id}`;
+    const activeCount = db.prepare(`
+      SELECT COUNT(DISTINCT u.telegram_id) as count
+      FROM users u
+      JOIN submissions s ON s.user_id = u.id
+      WHERE u.referred_by = ? AND s.status = 'approved'
+    `).get(user.telegram_id).count;
+    const nextMilestone = (Math.floor(activeCount / 10) + 1) * 10;
+    ctx.reply(
+      `🔗 Your referral link:\n${link}\n\n👥 Active referrals: ${activeCount}\n🎯 Next $1 bonus at: ${nextMilestone} active referrals\n\n(An "active" referral is someone who joined with your link AND had at least 1 task approved)`
+    );
+  });
+});
+
+bot.hears('🔗 Referral', (ctx) => {
+  const user = getOrCreateUser(ctx);
+  ctx.telegram.getMe().then(me => {
+    const link = `https://t.me/${me.username}?start=ref${user.telegram_id}`;
+    const activeCount = db.prepare(`
+      SELECT COUNT(DISTINCT u.telegram_id) as count
+      FROM users u
+      JOIN submissions s ON s.user_id = u.id
+      WHERE u.referred_by = ? AND s.status = 'approved'
+    `).get(user.telegram_id).count;
+    const nextMilestone = (Math.floor(activeCount / 10) + 1) * 10;
+    ctx.reply(
+      `🔗 Your referral link:\n${link}\n\n👥 Active referrals: ${activeCount}\n🎯 Next $1 bonus at: ${nextMilestone} active referrals\n\n(An "active" referral is someone who joined with your link AND had at least 1 task approved)`
+    );
+  });
 });
 
 bot.command('tasks', (ctx) => {
@@ -220,6 +272,27 @@ bot.action(/approve_(\d+)/, async (ctx) => {
   ctx.answerCbQuery('Approved!');
   ctx.editMessageReplyMarkup();
   ctx.telegram.sendMessage(user.telegram_id, `✅ Your submission for "${task.title}" was approved! +${task.reward} added to your balance.`).catch(() => {});
+
+  if (user.referred_by) {
+    const referrer = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(user.referred_by);
+    if (referrer) {
+      const activeCount = db.prepare(`
+        SELECT COUNT(DISTINCT u.telegram_id) as count
+        FROM users u
+        JOIN submissions s ON s.user_id = u.id
+        WHERE u.referred_by = ? AND s.status = 'approved'
+      `).get(referrer.telegram_id).count;
+
+      const milestonesEarned = Math.floor(activeCount / 10);
+      if (milestonesEarned > referrer.referral_milestones_paid) {
+        const newBonuses = milestonesEarned - referrer.referral_milestones_paid;
+        const bonusAmount = newBonuses * 1;
+        db.prepare('UPDATE users SET balance = balance + ?, referral_milestones_paid = ? WHERE id = ?')
+          .run(bonusAmount, milestonesEarned, referrer.id);
+        ctx.telegram.sendMessage(referrer.telegram_id, `🎉 Referral bonus! You've hit ${milestonesEarned * 10} active referrals — +$${bonusAmount} added to your balance!`).catch(() => {});
+      }
+    }
+  }
 });
 
 bot.action(/reject_(\d+)/, async (ctx) => {
