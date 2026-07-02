@@ -44,11 +44,24 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   FOREIGN KEY (user_id) REFERENCES users(id)
   );
 `);
-
 try {
   db.exec('ALTER TABLE withdrawals ADD COLUMN wallet_address TEXT');
 } catch (e) {
   // column already exists, ignore
 }
 
+try {
+  db.exec('ALTER TABLE users ADD COLUMN referred_by INTEGER');
+} catch (e) {
+  // column already exists, ignore
+}
+
+try {
+  db.exec('ALTER TABLE users ADD COLUMN referral_milestones_paid INTEGER DEFAULT 0');
+} catch (e) {
+  // column already exists, ignore
+}
+
 module.exports = db;
+
+
