@@ -178,6 +178,7 @@ bot.on('photo', async (ctx) => {
 bot.command('balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
+  });
   bot.command('withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
