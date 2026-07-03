@@ -227,9 +227,6 @@ bot.command('addtask', (ctx) => {
   const state = pendingTaskCreation.get(ctx.from.id);
   if (!state || !isAdmin(ctx)) return next();
 
-  const state = pendingTaskCreation.get(ctx.from.id);
-  if (!state || !isAdmin(ctx)) return next();
-
   const text = ctx.message.text.trim();
 
   if (state.step === 'title') {
