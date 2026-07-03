@@ -178,30 +178,54 @@ bot.on('photo', async (ctx) => {
 bot.command('balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
-  });
-bot.command('withdraw', (ctx) => {
+  })bot.command('withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
-  pendingWithdrawal.set(ctx.from.id, true);
-  ctx.reply('Please send your Solana (SOL) wallet address to receive payment:');
+  const existingPending = db.prepare(`SELECT * FROM withdrawals WHERE user_id = ? AND status = 'pending'`).get(user.id);
+  if (existingPending) {
+    return ctx.reply('You already have a pending withdrawal request. Please wait until it\'s processed before requesting another.');
+  }
+  pendingWithdrawal.set(ctx.from.id, { step: 'amount' });
+  ctx.reply(`Your balance: ${user.balance}\n\nHow much would you like to withdraw?`);
 });
 bot.command('addtask', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   pendingTaskCreation.set(ctx.from.id, { step: 'title' });
   ctx.reply('Let\'s create a task. Send the task TITLE:');
-});
-bot.on('text', (ctx, next) => {
-  if (pendingWithdrawal.get(ctx.from.id)) {
-    const walletAddress = ctx.message.text.trim();
+});bot.on('text', (ctx, next) => {
+  const withdrawState = pendingWithdrawal.get(ctx.from.id);
+  if (withdrawState) {
     const user = getOrCreateUser(ctx);
-    pendingWithdrawal.delete(ctx.from.id);
-    db.prepare('INSERT INTO withdrawals (user_id, amount, wallet_address) VALUES (?, ?, ?)').run(user.id, user.balance, walletAddress);
-    ctx.reply(`Withdrawal request for ${user.balance} submitted to wallet ${walletAddress}. You'll be paid once approved.`);
-    for (const adminId of ADMIN_IDS) {
-      ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${user.balance}\nWallet: ${walletAddress}\nUse /withdrawals to review.`).catch(() => {});
+
+    if (withdrawState.step === 'amount') {
+      const amount = parseFloat(ctx.message.text.trim());
+      if (isNaN(amount) || amount <= 0) {
+        return ctx.reply('Please enter a valid positive number.');
+      }
+      if (amount > user.balance) {
+        return ctx.reply(`You only have ${user.balance} available. Please enter a smaller amount.`);
+      }
+      withdrawState.step = 'wallet';
+      withdrawState.amount = amount;
+      pendingWithdrawal.set(ctx.from.id, withdrawState);
+      return ctx.reply('Please send your Solana (SOL) wallet address to receive payment:');
     }
-    return;
+
+    if (withdrawState.step === 'wallet') {
+      const walletAddress = ctx.message.text.trim();
+      const amount = withdrawState.amount;
+      pendingWithdrawal.delete(ctx.from.id);
+      db.prepare('INSERT INTO withdrawals (user_id, amount, wallet_address) VALUES (?, ?, ?)').run(user.id, amount, walletAddress);
+      ctx.reply(`Withdrawal request for ${amount} submitted to wallet ${walletAddress}. You'll be paid once approved.`);
+      for (const adminId of ADMIN_IDS) {
+        ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${amount}\nWallet: ${walletAddress}\nUse /withdrawals to review.`).catch(() => {});
+      }
+      return;
+    }
   }
+
+  const state = pendingTaskCreation.get(ctx.from.id);
+  if (!state || !isAdmin(ctx)) return next();
 
   const state = pendingTaskCreation.get(ctx.from.id);
   if (!state || !isAdmin(ctx)) return next();
@@ -441,8 +465,12 @@ bot.hears('💰 Balance', (ctx) => {
 bot.hears('💸 Withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
-  pendingWithdrawal.set(ctx.from.id, true);
-  ctx.reply('Please send your Solana (SOL) wallet address to receive payment:');
+  const existingPending = db.prepare(`SELECT * FROM withdrawals WHERE user_id = ? AND status = 'pending'`).get(user.id);
+  if (existingPending) {
+    return ctx.reply('You already have a pending withdrawal request. Please wait until it\'s processed before requesting another.');
+  }
+  pendingWithdrawal.set(ctx.from.id, { step: 'amount' });
+  ctx.reply(`Your balance: ${user.balance}\n\nHow much would you like to withdraw?`);
 });
 
 setInterval(() => {
