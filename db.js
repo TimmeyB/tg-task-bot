@@ -62,6 +62,12 @@ try {
   // column already exists, ignore
 }
 
+try {
+  db.exec('ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0');
+} catch (e) {
+  // column already exists, ignore
+}
+
 module.exports = db;
 
 
