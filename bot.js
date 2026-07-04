@@ -53,7 +53,7 @@ bot.start((ctx) => {
   getOrCreateUserWithReferral(ctx);
   ctx.reply(
     `Welcome ${ctx.from.first_name}! 👋\n\nThis bot lets you earn money completing simple tasks.\n\nTap a button below anytime.\n\n💬 Join our community for updates & to connect with other users: https://t.me/+EEDVwNc2s345OGVk` +
-    (isAdmin(ctx) ? `\n\nAdmin commands:\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests\n/broadcast - message all users` : ''),
+    (isAdmin(ctx) ? `\n\nAdmin commands:\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests\n/broadcast - message all users\n/ban - ban a user\n/unban - unban a user` : ''),
     Markup.keyboard([
       ['📋 Tasks', '💰 Balance'],
       ['💸 Withdraw', '🔗 Referral'],
@@ -74,14 +74,18 @@ bot.command('referral', (ctx) => {
   ctx.telegram.getMe().then(me => {
     const link = `https://t.me/${me.username}?start=ref${user.telegram_id}`;
     const activeCount = db.prepare(`
-      SELECT COUNT(DISTINCT u.telegram_id) as count
-      FROM users u
-      JOIN submissions s ON s.user_id = u.id
-      WHERE u.referred_by = ? AND s.status = 'approved'
+      SELECT COUNT(*) as count FROM (
+        SELECT u.id
+        FROM users u
+        JOIN submissions s ON s.user_id = u.id
+        WHERE u.referred_by = ? AND s.status = 'approved'
+        GROUP BY u.id
+        HAVING COUNT(s.id) >= 5
+      )
     `).get(user.telegram_id).count;
     const nextMilestone = (Math.floor(activeCount / 10) + 1) * 10;
     ctx.reply(
-      `🔗 Your referral link:\n${link}\n\n👥 Active referrals: ${activeCount}\n🎯 Next $1 bonus at: ${nextMilestone} active referrals\n\n(An "active" referral is someone who joined with your link AND had at least 1 task approved)`
+      `🔗 Your referral link:\n${link}\n\n👥 Active referrals: ${activeCount}\n🎯 Next $1 bonus at: ${nextMilestone} active referrals\n\n(An "active" referral is someone who joined with your link AND completed at least 5 approved tasks)`
     );
   });
 });
@@ -91,14 +95,18 @@ bot.hears('🔗 Referral', (ctx) => {
   ctx.telegram.getMe().then(me => {
     const link = `https://t.me/${me.username}?start=ref${user.telegram_id}`;
     const activeCount = db.prepare(`
-      SELECT COUNT(DISTINCT u.telegram_id) as count
-      FROM users u
-      JOIN submissions s ON s.user_id = u.id
-      WHERE u.referred_by = ? AND s.status = 'approved'
+      SELECT COUNT(*) as count FROM (
+        SELECT u.id
+        FROM users u
+        JOIN submissions s ON s.user_id = u.id
+        WHERE u.referred_by = ? AND s.status = 'approved'
+        GROUP BY u.id
+        HAVING COUNT(s.id) >= 5
+      )
     `).get(user.telegram_id).count;
     const nextMilestone = (Math.floor(activeCount / 10) + 1) * 10;
     ctx.reply(
-      `🔗 Your referral link:\n${link}\n\n👥 Active referrals: ${activeCount}\n🎯 Next $1 bonus at: ${nextMilestone} active referrals\n\n(An "active" referral is someone who joined with your link AND had at least 1 task approved)`
+      `🔗 Your referral link:\n${link}\n\n👥 Active referrals: ${activeCount}\n🎯 Next $1 bonus at: ${nextMilestone} active referrals\n\n(An "active" referral is someone who joined with your link AND completed at least 5 approved tasks)`
     );
   });
 });
@@ -133,6 +141,9 @@ bot.action(/dotask_(\d+)/, (ctx) => {
     return ctx.answerCbQuery('This task is no longer available.');
   }
   const user = getOrCreateUser(ctx);
+  if (user.banned) {
+    return ctx.answerCbQuery('Your account has been banned from using this bot.', { show_alert: true });
+  }
   const existing = db.prepare(`SELECT * FROM submissions WHERE task_id = ? AND user_id = ? AND status != 'rejected'`).get(taskId, user.id);
   if (existing) {
     return ctx.answerCbQuery('You already submitted this task.', { show_alert: true });
@@ -181,6 +192,7 @@ bot.command('balance', (ctx) => {
   });
   bot.command('withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
+  if (user.banned) return ctx.reply('Your account has been banned from using this bot.');
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
   const existingPending = db.prepare(`SELECT * FROM withdrawals WHERE user_id = ? AND status = 'pending'`).get(user.id);
   if (existingPending) {
@@ -189,6 +201,29 @@ bot.command('balance', (ctx) => {
   pendingWithdrawal.set(ctx.from.id, { step: 'amount' });
   ctx.reply(`Your balance: ${user.balance}\n\nHow much would you like to withdraw?`);
 });
+
+bot.command('ban', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply('Usage: /ban <telegram_id>');
+  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(targetId);
+  if (!user) return ctx.reply('User not found.');
+  db.prepare('UPDATE users SET banned = 1 WHERE telegram_id = ?').run(targetId);
+  ctx.reply(`🚫 User @${user.username} (${targetId}) has been banned.`);
+  ctx.telegram.sendMessage(targetId, '🚫 You have been banned from using this bot. Contact support if you believe this is a mistake.').catch(() => {});
+});
+
+bot.command('unban', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply('Usage: /unban <telegram_id>');
+  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(targetId);
+  if (!user) return ctx.reply('User not found.');
+  db.prepare('UPDATE users SET banned = 0 WHERE telegram_id = ?').run(targetId);
+  ctx.reply(`✅ User @${user.username} (${targetId}) has been unbanned.`);
+  ctx.telegram.sendMessage(targetId, '✅ You have been unbanned and can use the bot again.').catch(() => {});
+});
+
 bot.command('addtask', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   pendingTaskCreation.set(ctx.from.id, { step: 'title' });
@@ -307,10 +342,14 @@ bot.action(/approve_(\d+)/, async (ctx) => {
     const referrer = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(user.referred_by);
     if (referrer) {
       const activeCount = db.prepare(`
-        SELECT COUNT(DISTINCT u.telegram_id) as count
-        FROM users u
-        JOIN submissions s ON s.user_id = u.id
-        WHERE u.referred_by = ? AND s.status = 'approved'
+        SELECT COUNT(*) as count FROM (
+          SELECT u.id
+          FROM users u
+          JOIN submissions s ON s.user_id = u.id
+          WHERE u.referred_by = ? AND s.status = 'approved'
+          GROUP BY u.id
+          HAVING COUNT(s.id) >= 5
+        )
       `).get(referrer.telegram_id).count;
 
       const milestonesEarned = Math.floor(activeCount / 10);
@@ -388,12 +427,12 @@ bot.action(/deltask_(\d+)/, (ctx) => {
 
 bot.command('users', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
-  const users = db.prepare('SELECT telegram_id, username, balance FROM users ORDER BY id DESC').all();
+  const users = db.prepare('SELECT telegram_id, username, balance, banned FROM users ORDER BY id DESC').all();
   if (users.length === 0) return ctx.reply('No users yet.');
 
   let message = `👥 Total users: ${users.length}\n\n`;
   users.forEach(u => {
-    message += `@${u.username} — id: ${u.telegram_id} — balance: ${u.balance}\n`;
+    message += `@${u.username} — id: ${u.telegram_id} — balance: ${u.balance}${u.banned ? ' — 🚫 BANNED' : ''}\n`;
   });
 
   if (message.length > 4000) {
@@ -462,6 +501,7 @@ bot.hears('💰 Balance', (ctx) => {
 });
 bot.hears('💸 Withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
+  if (user.banned) return ctx.reply('Your account has been banned from using this bot.');
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
   const existingPending = db.prepare(`SELECT * FROM withdrawals WHERE user_id = ? AND status = 'pending'`).get(user.id);
   if (existingPending) {
@@ -487,4 +527,3 @@ console.log('Bot is running...');
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-  
