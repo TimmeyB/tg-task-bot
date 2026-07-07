@@ -152,7 +152,7 @@ bot.action(/dotask_(\d+)/, (ctx) => {
   ctx.answerCbQuery();
   ctx.reply(`Got it. Complete the task, then send me a screenshot as proof (just send the photo here). You have 2 hours before this expires.`);
 });
-bot.on('photo', async (ctx) => {
+
 async function handleProofSubmission(ctx, fileId, mediaType) {
   const pending = pendingSubmission.get(ctx.from.id);
   if (!pending) return;
