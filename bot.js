@@ -153,6 +153,7 @@ bot.action(/dotask_(\d+)/, (ctx) => {
   ctx.reply(`Got it. Complete the task, then send me a screenshot as proof (just send the photo here). You have 2 hours before this expires.`);
 });
 bot.on('photo', async (ctx) => {
+async function handleProofSubmission(ctx, fileId, mediaType) {
   const pending = pendingSubmission.get(ctx.from.id);
   if (!pending) return;
   if (Date.now() > pending.expiresAt) {
@@ -162,9 +163,8 @@ bot.on('photo', async (ctx) => {
   const taskId = pending.taskId;
 
   const user = getOrCreateUser(ctx);
-  const photo = ctx.message.photo[ctx.message.photo.length - 1];
   db.prepare('INSERT INTO submissions (task_id, user_id, photo_file_id) VALUES (?, ?, ?)')
-    .run(taskId, user.id, photo.file_id);
+    .run(taskId, user.id, fileId);
 
   pendingSubmission.delete(ctx.from.id);
   ctx.reply('✅ Proof submitted! You\'ll be notified once it\'s reviewed.');
@@ -173,17 +173,29 @@ bot.on('photo', async (ctx) => {
   const submissionId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
   for (const adminId of ADMIN_IDS) {
     try {
-      await ctx.telegram.sendPhoto(adminId, photo.file_id, {
-        caption: `New submission #${submissionId}\nTask: ${task.title}\nUser: @${user.username} (id ${user.telegram_id})`,
-        ...Markup.inlineKeyboard([
-          Markup.button.callback('✅ Approve', `approve_${submissionId}`),
-          Markup.button.callback('❌ Reject', `reject_${submissionId}`)
-        ])
-      });
+      const caption = `New submission #${submissionId}\nTask: ${task.title}\nUser: @${user.username} (id ${user.telegram_id})`;
+      const buttons = Markup.inlineKeyboard([
+        Markup.button.callback('✅ Approve', `approve_${submissionId}`),
+        Markup.button.callback('❌ Reject', `reject_${submissionId}`)
+      ]);
+      if (mediaType === 'video') {
+        await ctx.telegram.sendVideo(adminId, fileId, { caption, ...buttons });
+      } else {
+        await ctx.telegram.sendPhoto(adminId, fileId, { caption, ...buttons });
+      }
     } catch (e) {
       console.error('Could not notify admin', adminId, e.message);
     }
   }
+}
+
+bot.on('photo', async (ctx) => {
+  const photo = ctx.message.photo[ctx.message.photo.length - 1];
+  await handleProofSubmission(ctx, photo.file_id, 'photo');
+});
+
+bot.on('video', async (ctx) => {
+  await handleProofSubmission(ctx, ctx.message.video.file_id, 'video');
 });
 
 bot.command('balance', (ctx) => {
@@ -399,7 +411,7 @@ bot.command('broadcast', async (ctx) => {
 
 bot.command('alltasks', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
-  const tasks = db.prepare('SELECT * FROM tasks ORDER BY id DESC').all();
+  const tasks = db.prepare(`SELECT * FROM tasks WHERE status != 'deleted' ORDER BY id DESC`).all();
   if (tasks.length === 0) return ctx.reply('No tasks created yet.');
 
   tasks.forEach(task => {
@@ -412,19 +424,17 @@ bot.command('alltasks', (ctx) => {
     );
   });
 });
-
 bot.action(/deltask_(\d+)/, (ctx) => {
   if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
   const taskId = Number(ctx.match[1]);
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task) return ctx.answerCbQuery('Task not found or already deleted.');
 
-  db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('closed', taskId);
-  ctx.answerCbQuery('Task closed.');
+  db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('deleted', taskId);
+  ctx.answerCbQuery('Task deleted.');
   ctx.editMessageReplyMarkup();
-  ctx.reply(`✅ Task "${task.title}" has been closed and removed from active listings.`);
+  ctx.reply(`✅ Task "${task.title}" has been deleted and removed from all listings.`);
 });
-
 bot.command('users', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   const users = db.prepare('SELECT telegram_id, username, balance, banned FROM users ORDER BY id DESC').all();
