@@ -256,21 +256,38 @@ bot.command('addtask', (ctx) => {
       withdrawState.step = 'wallet';
       withdrawState.amount = amount;
       pendingWithdrawal.set(ctx.from.id, withdrawState);
-      return ctx.reply('Please send your Solana (SOL) wallet address to receive payment:');
+      return ctx.reply('Please send your USDC (Solana) wallet address to receive payment:\n\n⚠️ Double-check this address carefully. If you send a wrong or invalid address, your funds will be lost permanently — this is NOT reversible and is not on us. Copy-paste directly from your wallet app, don\'t type it manually.');
+    }
+if (withdrawState.step === 'wallet') {
+      const walletAddress = ctx.message.text.trim();
+      withdrawState.step = 'confirm';
+      withdrawState.walletAddress = walletAddress;
+      pendingWithdrawal.set(ctx.from.id, withdrawState);
+      return ctx.reply(
+        `Please confirm your withdrawal:\n\n💰 Amount: ${withdrawState.amount}\n🔑 Wallet: ${walletAddress}\n\n⚠️ This cannot be undone once sent. If this address is wrong, your funds will be lost permanently.\n\nType YES to confirm, or CANCEL to stop.`
+      );
     }
 
-    if (withdrawState.step === 'wallet') {
-      const walletAddress = ctx.message.text.trim();
+    if (withdrawState.step === 'confirm') {
+      const response = ctx.message.text.trim().toUpperCase();
+      if (response === 'CANCEL') {
+        pendingWithdrawal.delete(ctx.from.id);
+        return ctx.reply('Withdrawal cancelled. No changes made to your balance.');
+      }
+      if (response !== 'YES') {
+        return ctx.reply('Please type YES to confirm, or CANCEL to stop.');
+      }
       const amount = withdrawState.amount;
+      const walletAddress = withdrawState.walletAddress;
       pendingWithdrawal.delete(ctx.from.id);
       db.prepare('INSERT INTO withdrawals (user_id, amount, wallet_address) VALUES (?, ?, ?)').run(user.id, amount, walletAddress);
-      ctx.reply(`Withdrawal request for ${amount} submitted to wallet ${walletAddress}. You'll be paid once approved.`);
+      ctx.reply(`✅ Withdrawal request for ${amount} submitted to wallet ${walletAddress}. You'll be paid once approved.`);
       for (const adminId of ADMIN_IDS) {
         ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${amount}\nWallet: ${walletAddress}\nUse /withdrawals to review.`).catch(() => {});
       }
       return;
     }
-  }
+}
 
   const state = pendingTaskCreation.get(ctx.from.id);
   if (!state || !isAdmin(ctx)) return next();
