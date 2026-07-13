@@ -124,16 +124,13 @@ bot.command('tasks', (ctx) => {
   tasks.forEach(task => {
     const slotsLeft = task.slots_total - task.slots_filled;
     ctx.reply(
-      `📋 *${task.title}*\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          Markup.button.callback('✅ Do this task', `dotask_${task.id}`)
-        ])
-      }
-    );
-  });
-});
+  `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
+  {
+    ...Markup.inlineKeyboard([
+      Markup.button.callback('✅ Do this task', `dotask_${task.id}`)
+    ])
+  }
+);
 bot.action(/dotask_(\d+)/, (ctx) => {
   const taskId = Number(ctx.match[1]);
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
@@ -516,11 +513,13 @@ bot.hears('📋 Tasks', (ctx) => {
   tasks.forEach(task => {
     const slotsLeft = task.slots_total - task.slots_filled;
     ctx.reply(
-      `📋 *${task.title}*\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
-      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([Markup.button.callback('✅ Do this task', `dotask_${task.id}`)]) }
-    );
-  });
-});
+  `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
+  {
+    ...Markup.inlineKeyboard([
+      Markup.button.callback('✅ Do this task', `dotask_${task.id}`)
+    ])
+  }
+);
 
 bot.hears('💰 Balance', (ctx) => {
   const user = getOrCreateUser(ctx);
