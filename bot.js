@@ -488,39 +488,31 @@ bot.command('withdrawals', (ctx) => {
 });
 
 bot.action(/paid_(\d+)/, async (ctx) => {
-  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
-  const reqId = Number(ctx.match[1]);
-  const req = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(reqId);
-  if (!req || req.status !== 'pending') return ctx.answerCbQuery('Already handled.');
+if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+const reqId = Number(ctx.match[1]);
+const req = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(reqId);
+if (!req || req.status !== 'pending') return ctx.answerCbQuery('Already handled.');
 
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user_id);
-  db.prepare('UPDATE withdrawals SET status = ? WHERE id = ?').run('paid', reqId);
-  db.prepare('UPDATE users SET balance = balance - ? WHERE id = ?').run(req.amount, user.id);
+const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user_id);
+db.prepare('UPDATE withdrawals SET status = ? WHERE id = ?').run('paid', reqId);
+db.prepare('UPDATE users SET balance = balance - ? WHERE id = ?').run(req.amount, user.id);
 
-  ctx.answerCbQuery('Marked as paid.');
-  ctx.editMessageReplyMarkup();
-  ctx.telegram.sendMessage(user.telegram_id, `💸 Your withdrawal of ${req.amount} has been paid!`).catch(() => {});
+ctx.answerCbQuery('Marked as paid.');
+ctx.editMessageReplyMarkup();
+ctx.telegram.sendMessage(user.telegram_id, 💸 Your withdrawal of ${req.amount} has been paid!).catch(() => {});
 });
 bot.hears('📋 Tasks', (ctx) => {
-  const user = getOrCreateUser(ctx);
-  const tasks = db.prepare(`
-    SELECT * FROM tasks
-    WHERE status = 'open' AND slots_filled < slots_total
-    AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')
-    ORDER BY id DESC
-  `).all(user.id);
-  if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
-  tasks.forEach(task => {
-    const slotsLeft = task.slots_total - task.slots_filled;
-    ctx.reply(
-  `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
-  {
-    ...Markup.inlineKeyboard([
-      Markup.button.callback('✅ Do this task', `dotask_${task.id}`)
-    ])
-  }
+const user = getOrCreateUser(ctx);
+const tasks = db.prepare(  SELECT * FROM tasks   WHERE status = 'open' AND slots_filled < slots_total   AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')   ORDER BY id DESC  ).all(user.id);
+if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
+tasks.forEach(task => {
+const slotsLeft = task.slots_total - task.slots_filled;
+ctx.reply(
+📋 *${task.title}*\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft},
+{ ...Markup.inlineKeyboard([Markup.button.callback('✅ Do this task', dotask_${task.id})]) }
 );
-
+});
+});
 bot.hears('💰 Balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
