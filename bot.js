@@ -124,13 +124,16 @@ bot.command('tasks', (ctx) => {
   tasks.forEach(task => {
     const slotsLeft = task.slots_total - task.slots_filled;
     ctx.reply(
-  `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
-  {
-    ...Markup.inlineKeyboard([
-      Markup.button.callback('✅ Do this task', `dotask_${task.id}`)
-    ])
-  }
-);
+      `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
+      {
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('✅ Do this task', `dotask_${task.id}`)
+        ])
+      }
+    );
+  });
+});
+
 bot.action(/dotask_(\d+)/, (ctx) => {
   const taskId = Number(ctx.match[1]);
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
@@ -198,8 +201,9 @@ bot.on('video', async (ctx) => {
 bot.command('balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
-  });
-  bot.command('withdraw', (ctx) => {
+});
+
+bot.command('withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.banned) return ctx.reply('Your account has been banned from using this bot.');
   if (user.balance <= 0) return ctx.reply('You have no balance to withdraw.');
@@ -237,7 +241,9 @@ bot.command('addtask', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   pendingTaskCreation.set(ctx.from.id, { step: 'title' });
   ctx.reply('Let\'s create a task. Send the task TITLE:');
-});bot.on('text', (ctx, next) => {
+});
+
+bot.on('text', (ctx, next) => {
   const withdrawState = pendingWithdrawal.get(ctx.from.id);
   if (withdrawState) {
     const user = getOrCreateUser(ctx);
@@ -255,7 +261,8 @@ bot.command('addtask', (ctx) => {
       pendingWithdrawal.set(ctx.from.id, withdrawState);
       return ctx.reply('Please send your USDC (Solana) wallet address to receive payment:\n\n⚠️ Double-check this address carefully. If you send a wrong or invalid address, your funds will be lost permanently — this is NOT reversible and is not on us. Copy-paste directly from your wallet app, don\'t type it manually.');
     }
-if (withdrawState.step === 'wallet') {
+
+    if (withdrawState.step === 'wallet') {
       const walletAddress = ctx.message.text.trim();
       withdrawState.step = 'confirm';
       withdrawState.walletAddress = walletAddress;
@@ -284,7 +291,7 @@ if (withdrawState.step === 'wallet') {
       }
       return;
     }
-}
+  }
 
   const state = pendingTaskCreation.get(ctx.from.id);
   if (!state || !isAdmin(ctx)) return next();
@@ -321,8 +328,7 @@ if (withdrawState.step === 'wallet') {
 bot.command('pending', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   const subs = db.prepare(`
-
-SELECT submissions.id, tasks.title, users.username, users.telegram_id
+    SELECT submissions.id, tasks.title, users.username, users.telegram_id
     FROM submissions
     JOIN tasks ON submissions.task_id = tasks.id
     JOIN users ON submissions.user_id = users.id
@@ -404,6 +410,7 @@ bot.action(/reject_(\d+)/, async (ctx) => {
   ctx.editMessageReplyMarkup();
   ctx.telegram.sendMessage(user.telegram_id, `❌ Your submission for "${task.title}" was rejected. Try another task!`).catch(() => {});
 });
+
 bot.command('broadcast', async (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   const message = ctx.message.text.replace('/broadcast', '').trim();
@@ -438,6 +445,7 @@ bot.command('alltasks', (ctx) => {
     );
   });
 });
+
 bot.action(/deltask_(\d+)/, (ctx) => {
   if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
   const taskId = Number(ctx.match[1]);
@@ -449,6 +457,7 @@ bot.action(/deltask_(\d+)/, (ctx) => {
   ctx.editMessageReplyMarkup();
   ctx.reply(`✅ Task "${task.title}" has been deleted and removed from all listings.`);
 });
+
 bot.command('users', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   const users = db.prepare('SELECT telegram_id, username, balance, banned FROM users ORDER BY id DESC').all();
@@ -466,7 +475,6 @@ bot.command('users', (ctx) => {
     ctx.reply(message);
   }
 });
-
 
 bot.command('withdrawals', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
@@ -488,35 +496,44 @@ bot.command('withdrawals', (ctx) => {
 });
 
 bot.action(/paid_(\d+)/, async (ctx) => {
-if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
-const reqId = Number(ctx.match[1]);
-const req = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(reqId);
-if (!req || req.status !== 'pending') return ctx.answerCbQuery('Already handled.');
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+  const reqId = Number(ctx.match[1]);
+  const req = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(reqId);
+  if (!req || req.status !== 'pending') return ctx.answerCbQuery('Already handled.');
 
-const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user_id);
-db.prepare('UPDATE withdrawals SET status = ? WHERE id = ?').run('paid', reqId);
-db.prepare('UPDATE users SET balance = balance - ? WHERE id = ?').run(req.amount, user.id);
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user_id);
+  db.prepare('UPDATE withdrawals SET status = ? WHERE id = ?').run('paid', reqId);
+  db.prepare('UPDATE users SET balance = balance - ? WHERE id = ?').run(req.amount, user.id);
 
-ctx.answerCbQuery('Marked as paid.');
-ctx.editMessageReplyMarkup();
-ctx.telegram.sendMessage(user.telegram_id, 💸 Your withdrawal of ${req.amount} has been paid!).catch(() => {});
+  ctx.answerCbQuery('Marked as paid.');
+  ctx.editMessageReplyMarkup();
+  ctx.telegram.sendMessage(user.telegram_id, `💸 Your withdrawal of ${req.amount} has been paid!`).catch(() => {});
 });
+
 bot.hears('📋 Tasks', (ctx) => {
-const user = getOrCreateUser(ctx);
-const tasks = db.prepare(  SELECT * FROM tasks   WHERE status = 'open' AND slots_filled < slots_total   AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')   ORDER BY id DESC  ).all(user.id);
-if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
-tasks.forEach(task => {
-const slotsLeft = task.slots_total - task.slots_filled;
-ctx.reply(
-📋 *${task.title}*\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft},
-{ ...Markup.inlineKeyboard([Markup.button.callback('✅ Do this task', dotask_${task.id})]) }
-);
+  const user = getOrCreateUser(ctx);
+  const tasks = db.prepare(`
+    SELECT * FROM tasks
+    WHERE status = 'open' AND slots_filled < slots_total
+    AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')
+    ORDER BY id DESC
+  `).all(user.id);
+  if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
+
+  tasks.forEach(task => {
+    const slotsLeft = task.slots_total - task.slots_filled;
+    ctx.reply(
+      `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
+      { ...Markup.inlineKeyboard([Markup.button.callback('✅ Do this task', `dotask_${task.id}`)]) }
+    );
+  });
 });
-});
+
 bot.hears('💰 Balance', (ctx) => {
   const user = getOrCreateUser(ctx);
   ctx.reply(`💰 Your balance: ${user.balance}`);
 });
+
 bot.hears('💸 Withdraw', (ctx) => {
   const user = getOrCreateUser(ctx);
   if (user.banned) return ctx.reply('Your account has been banned from using this bot.');
