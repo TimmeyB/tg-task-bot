@@ -114,15 +114,16 @@ bot.hears('🔗 Referral', (ctx) => {
 bot.command('tasks', (ctx) => {
   const user = getOrCreateUser(ctx);
   const tasks = db.prepare(`
-    SELECT * FROM tasks
-    WHERE status = 'open' AND slots_filled < slots_total
+    SELECT *, (SELECT COUNT(*) FROM submissions s2 WHERE s2.task_id = tasks.id AND s2.status = 'pending') as reserved
+    FROM tasks
+    WHERE status = 'open' AND (slots_filled + reserved) < slots_total
     AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')
     ORDER BY id DESC
   `).all(user.id);
   if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
 
   tasks.forEach(task => {
-    const slotsLeft = task.slots_total - task.slots_filled;
+    const slotsLeft = task.slots_total - task.slots_filled - task.reserved;
     ctx.reply(
       `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
       {
@@ -519,7 +520,6 @@ bot.hears('📋 Tasks', (ctx) => {
     ORDER BY id DESC
   `).all(user.id);
   if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
-
   tasks.forEach(task => {
     const slotsLeft = task.slots_total - task.slots_filled;
     ctx.reply(
