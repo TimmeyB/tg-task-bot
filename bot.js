@@ -30,6 +30,18 @@ const pendingSubmission = new Map();
 const pendingTaskCreation = new Map();
 const pendingWithdrawal = new Map();
 
+// Counts slots that are "spoken for" for a task but not yet reflected in slots_filled:
+// - submissions already sent and awaiting admin review (DB)
+// - claims made (tapped "Do this task") but proof not yet sent (in-memory, 2hr window)
+function getReservedCount(taskId) {
+  const dbPending = db.prepare(`SELECT COUNT(*) as count FROM submissions WHERE task_id = ? AND status = 'pending'`).get(taskId).count;
+  let claimedCount = 0;
+  for (const pending of pendingSubmission.values()) {
+    if (pending.taskId === taskId) claimedCount++;
+  }
+  return dbPending + claimedCount;
+}
+
 function getOrCreateUserWithReferral(ctx) {
   const tgId = ctx.from.id;
   let user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(tgId);
@@ -113,13 +125,17 @@ bot.hears('🔗 Referral', (ctx) => {
 
 bot.command('tasks', (ctx) => {
   const user = getOrCreateUser(ctx);
-  const tasks = db.prepare(`
-    SELECT *, (SELECT COUNT(*) FROM submissions s2 WHERE s2.task_id = tasks.id AND s2.status = 'pending') as reserved
-    FROM tasks
-    WHERE status = 'open' AND (slots_filled + reserved) < slots_total
+  const openTasks = db.prepare(`
+    SELECT * FROM tasks
+    WHERE status = 'open'
     AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')
     ORDER BY id DESC
   `).all(user.id);
+
+  const tasks = openTasks
+    .map(task => ({ ...task, reserved: getReservedCount(task.id) }))
+    .filter(task => (task.slots_filled + task.reserved) < task.slots_total);
+
   if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
 
   tasks.forEach(task => {
@@ -138,7 +154,11 @@ bot.command('tasks', (ctx) => {
 bot.action(/dotask_(\d+)/, (ctx) => {
   const taskId = Number(ctx.match[1]);
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-  if (!task || task.status !== 'open' || task.slots_filled >= task.slots_total) {
+  if (!task || task.status !== 'open') {
+    return ctx.answerCbQuery('This task is no longer available.');
+  }
+  const reserved = getReservedCount(taskId);
+  if (task.slots_filled + reserved >= task.slots_total) {
     return ctx.answerCbQuery('This task is no longer available.');
   }
   const user = getOrCreateUser(ctx);
@@ -437,9 +457,10 @@ bot.command('alltasks', (ctx) => {
   if (tasks.length === 0) return ctx.reply('No tasks created yet.');
 
   tasks.forEach(task => {
-    const slotsLeft = task.slots_total - task.slots_filled;
+    const reserved = getReservedCount(task.id);
+    const slotsLeft = task.slots_total - task.slots_filled - reserved;
     ctx.reply(
-      `#${task.id} — ${task.title}\nStatus: ${task.status}\nSlots: ${task.slots_filled}/${task.slots_total} (${slotsLeft} left)\nReward: ${task.reward}`,
+      `#${task.id} — ${task.title}\nStatus: ${task.status}\nSlots: ${task.slots_filled}/${task.slots_total} (${reserved} reserved, ${slotsLeft} left)\nReward: ${task.reward}`,
       Markup.inlineKeyboard([
         Markup.button.callback('🗑 Delete this task', `deltask_${task.id}`)
       ])
@@ -513,15 +534,20 @@ bot.action(/paid_(\d+)/, async (ctx) => {
 
 bot.hears('📋 Tasks', (ctx) => {
   const user = getOrCreateUser(ctx);
-  const tasks = db.prepare(`
+  const openTasks = db.prepare(`
     SELECT * FROM tasks
-    WHERE status = 'open' AND slots_filled < slots_total
+    WHERE status = 'open'
     AND id NOT IN (SELECT task_id FROM submissions WHERE user_id = ? AND status != 'rejected')
     ORDER BY id DESC
   `).all(user.id);
+
+  const tasks = openTasks
+    .map(task => ({ ...task, reserved: getReservedCount(task.id) }))
+    .filter(task => (task.slots_filled + task.reserved) < task.slots_total);
+
   if (tasks.length === 0) return ctx.reply('No open tasks right now. Check back later!');
   tasks.forEach(task => {
-    const slotsLeft = task.slots_total - task.slots_filled;
+    const slotsLeft = task.slots_total - task.slots_filled - task.reserved;
     ctx.reply(
       `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
       { ...Markup.inlineKeyboard([Markup.button.callback('✅ Do this task', `dotask_${task.id}`)]) }
