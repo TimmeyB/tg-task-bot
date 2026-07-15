@@ -502,12 +502,24 @@ bot.action(/deltask_(\d+)/, (ctx) => {
 
 bot.command('users', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
-  const users = db.prepare('SELECT telegram_id, username, balance, banned FROM users ORDER BY id DESC').all();
+  const users = db.prepare(`
+    SELECT
+      u.telegram_id,
+      u.username,
+      u.balance,
+      u.banned,
+      (SELECT COUNT(*) FROM users r WHERE r.referred_by = u.telegram_id) as referral_count,
+      (SELECT COUNT(*) FROM submissions s JOIN users r2 ON s.user_id = r2.id
+        WHERE r2.referred_by = u.telegram_id AND s.status = 'approved') as referral_tasks_done
+    FROM users u
+    ORDER BY u.id DESC
+  `).all();
   if (users.length === 0) return ctx.reply('No users yet.');
 
   let message = `👥 Total users: ${users.length}\n\n`;
   users.forEach(u => {
     message += `@${esc(u.username)} — id: ${u.telegram_id} — balance: ${u.balance}${u.banned ? ' — 🚫 BANNED' : ''}\n`;
+    message += `   👥 Referrals: ${u.referral_count} — ✅ Tasks completed by referrals: ${u.referral_tasks_done}\n`;
   });
 
   if (message.length > 4000) {
