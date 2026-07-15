@@ -16,6 +16,15 @@ function isAdmin(ctx) {
   return ADMIN_IDS.includes(String(ctx.from.id));
 }
 
+// Escapes text so it's safe to interpolate into an HTML-parse-mode message.
+// Only &, <, > need escaping for Telegram's HTML mode (much safer than Markdown).
+function esc(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function getOrCreateUser(ctx) {
   const tgId = ctx.from.id;
   let user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(tgId);
@@ -64,13 +73,16 @@ function getOrCreateUserWithReferral(ctx) {
 bot.start((ctx) => {
   getOrCreateUserWithReferral(ctx);
   ctx.reply(
-    `Welcome ${ctx.from.first_name}! 👋\n\nThis bot lets you earn money completing simple tasks.\n\nTap a button below anytime.\n\n💬 Join our community for updates & to connect with other users: https://t.me/+EEDVwNc2s345OGVk` +
-    (isAdmin(ctx) ? `\n\nAdmin commands:\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests\n/broadcast - message all users\n/ban - ban a user\n/unban - unban a user` : ''),
-    Markup.keyboard([
-      ['📋 Tasks', '💰 Balance'],
-      ['💸 Withdraw', '🔗 Referral'],
-      ['💬 Community', '🆘 Support']
-    ]).resize()
+    `Welcome <b>${esc(ctx.from.first_name)}</b>! 👋\n\nThis bot lets you earn money completing simple tasks.\n\nTap a button below anytime.\n\n💬 Join our community for updates &amp; to connect with other users: https://t.me/+EEDVwNc2s345OGVk` +
+    (isAdmin(ctx) ? `\n\n<b>Admin commands:</b>\n/addtask - create a new task\n/pending - review submissions\n/withdrawals - review payout requests\n/broadcast - message all users\n/ban - ban a user\n/unban - unban a user` : ''),
+    {
+      parse_mode: 'HTML',
+      ...Markup.keyboard([
+        ['📋 Tasks', '💰 Balance'],
+        ['💸 Withdraw', '🔗 Referral'],
+        ['💬 Community', '🆘 Support']
+      ]).resize()
+    }
   );
 });
 
@@ -79,7 +91,7 @@ bot.hears('💬 Community', (ctx) => {
 });
 
 bot.hears('🆘 Support', (ctx) => {
-  ctx.reply('Having an issue? Message the admin directly: @Skiiddd');
+  ctx.reply('Having an issue? Message the admin directly: @timmeybchain');
 });
 bot.command('referral', (ctx) => {
   const user = getOrCreateUser(ctx);
@@ -141,8 +153,9 @@ bot.command('tasks', (ctx) => {
   tasks.forEach(task => {
     const slotsLeft = task.slots_total - task.slots_filled - task.reserved;
     ctx.reply(
-      `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
+      `📋 <b>${esc(task.title)}</b>\n\n${esc(task.description)}\n\n💰 Reward: ${esc(task.reward)}\n🎟 Slots left: ${slotsLeft}`,
       {
+        parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
           Markup.button.callback('✅ Do this task', `dotask_${task.id}`)
         ])
@@ -194,15 +207,15 @@ async function handleProofSubmission(ctx, fileId, mediaType) {
   const submissionId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
   for (const adminId of ADMIN_IDS) {
     try {
-      const caption = `New submission #${submissionId}\nTask: ${task.title}\nUser: @${user.username} (id ${user.telegram_id})`;
+      const caption = `New submission #${submissionId}\nTask: <b>${esc(task.title)}</b>\nUser: @${esc(user.username)} (id ${user.telegram_id})`;
       const buttons = Markup.inlineKeyboard([
         Markup.button.callback('✅ Approve', `approve_${submissionId}`),
         Markup.button.callback('❌ Reject', `reject_${submissionId}`)
       ]);
       if (mediaType === 'video') {
-        await ctx.telegram.sendVideo(adminId, fileId, { caption, ...buttons });
+        await ctx.telegram.sendVideo(adminId, fileId, { caption, parse_mode: 'HTML', ...buttons });
       } else {
-        await ctx.telegram.sendPhoto(adminId, fileId, { caption, ...buttons });
+        await ctx.telegram.sendPhoto(adminId, fileId, { caption, parse_mode: 'HTML', ...buttons });
       }
     } catch (e) {
       console.error('Could not notify admin', adminId, e.message);
@@ -243,7 +256,7 @@ bot.command('ban', (ctx) => {
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(targetId);
   if (!user) return ctx.reply('User not found.');
   db.prepare('UPDATE users SET banned = 1 WHERE telegram_id = ?').run(targetId);
-  ctx.reply(`🚫 User @${user.username} (${targetId}) has been banned.`);
+  ctx.reply(`🚫 User @${esc(user.username)} (${targetId}) has been banned.`, { parse_mode: 'HTML' });
   ctx.telegram.sendMessage(targetId, '🚫 You have been banned from using this bot. Contact support if you believe this is a mistake.').catch(() => {});
 });
 
@@ -254,7 +267,7 @@ bot.command('unban', (ctx) => {
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(targetId);
   if (!user) return ctx.reply('User not found.');
   db.prepare('UPDATE users SET banned = 0 WHERE telegram_id = ?').run(targetId);
-  ctx.reply(`✅ User @${user.username} (${targetId}) has been unbanned.`);
+  ctx.reply(`✅ User @${esc(user.username)} (${targetId}) has been unbanned.`, { parse_mode: 'HTML' });
   ctx.telegram.sendMessage(targetId, '✅ You have been unbanned and can use the bot again.').catch(() => {});
 });
 
@@ -289,7 +302,8 @@ bot.on('text', (ctx, next) => {
       withdrawState.walletAddress = walletAddress;
       pendingWithdrawal.set(ctx.from.id, withdrawState);
       return ctx.reply(
-        `Please confirm your withdrawal:\n\n💰 Amount: ${withdrawState.amount}\n🔑 Wallet: ${walletAddress}\n\n⚠️ This cannot be undone once sent. If this address is wrong, your funds will be lost permanently.\n\nType YES to confirm, or CANCEL to stop.`
+        `Please confirm your withdrawal:\n\n💰 Amount: ${withdrawState.amount}\n🔑 Wallet: <code>${esc(walletAddress)}</code>\n\n⚠️ This cannot be undone once sent. If this address is wrong, your funds will be lost permanently.\n\nType YES to confirm, or CANCEL to stop.`,
+        { parse_mode: 'HTML' }
       );
     }
 
@@ -306,9 +320,9 @@ bot.on('text', (ctx, next) => {
       const walletAddress = withdrawState.walletAddress;
       pendingWithdrawal.delete(ctx.from.id);
       db.prepare('INSERT INTO withdrawals (user_id, amount, wallet_address) VALUES (?, ?, ?)').run(user.id, amount, walletAddress);
-      ctx.reply(`✅ Withdrawal request for ${amount} submitted to wallet ${walletAddress}. You'll be paid once approved.`);
+      ctx.reply(`✅ Withdrawal request for ${amount} submitted to wallet <code>${esc(walletAddress)}</code>. You'll be paid once approved.`, { parse_mode: 'HTML' });
       for (const adminId of ADMIN_IDS) {
-        ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${user.username}: ${amount}\nWallet: ${walletAddress}\nUse /withdrawals to review.`).catch(() => {});
+        ctx.telegram.sendMessage(adminId, `💸 New withdrawal request from @${esc(user.username)}: ${amount}\nWallet: <code>${esc(walletAddress)}</code>\nUse /withdrawals to review.`, { parse_mode: 'HTML' }).catch(() => {});
       }
       return;
     }
@@ -360,11 +374,14 @@ bot.command('pending', (ctx) => {
   if (subs.length === 0) return ctx.reply('No pending submissions.');
   subs.forEach(s => {
     ctx.reply(
-      `#${s.id} — ${s.title} — @${s.username}`,
-      Markup.inlineKeyboard([
-        Markup.button.callback('✅ Approve', `approve_${s.id}`),
-        Markup.button.callback('❌ Reject', `reject_${s.id}`)
-      ])
+      `#${s.id} — ${esc(s.title)} — @${esc(s.username)}`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('✅ Approve', `approve_${s.id}`),
+          Markup.button.callback('❌ Reject', `reject_${s.id}`)
+        ])
+      }
     );
   });
 });
@@ -389,7 +406,7 @@ bot.action(/approve_(\d+)/, async (ctx) => {
 
   ctx.answerCbQuery('Approved!');
   ctx.editMessageReplyMarkup();
-  ctx.telegram.sendMessage(user.telegram_id, `✅ Your submission for "${task.title}" was approved! +${task.reward} added to your balance.`).catch(() => {});
+  ctx.telegram.sendMessage(user.telegram_id, `✅ Your submission for "${esc(task.title)}" was approved! +${task.reward} added to your balance.`, { parse_mode: 'HTML' }).catch(() => {});
 
   if (user.referred_by) {
     const referrer = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(user.referred_by);
@@ -429,7 +446,7 @@ bot.action(/reject_(\d+)/, async (ctx) => {
   db.prepare('UPDATE submissions SET status = ? WHERE id = ?').run('rejected', subId);
   ctx.answerCbQuery('Rejected.');
   ctx.editMessageReplyMarkup();
-  ctx.telegram.sendMessage(user.telegram_id, `❌ Your submission for "${task.title}" was rejected. Try another task!`).catch(() => {});
+  ctx.telegram.sendMessage(user.telegram_id, `❌ Your submission for "${esc(task.title)}" was rejected. Try another task!`, { parse_mode: 'HTML' }).catch(() => {});
 });
 
 bot.command('broadcast', async (ctx) => {
@@ -442,7 +459,7 @@ bot.command('broadcast', async (ctx) => {
   let failed = 0;
   for (const u of users) {
     try {
-      await bot.telegram.sendMessage(u.telegram_id, `📢 ${message}`);
+      await bot.telegram.sendMessage(u.telegram_id, `📢 ${esc(message)}`, { parse_mode: 'HTML' });
       sent++;
     } catch (e) {
       failed++;
@@ -460,10 +477,13 @@ bot.command('alltasks', (ctx) => {
     const reserved = getReservedCount(task.id);
     const slotsLeft = task.slots_total - task.slots_filled - reserved;
     ctx.reply(
-      `#${task.id} — ${task.title}\nStatus: ${task.status}\nSlots: ${task.slots_filled}/${task.slots_total} (${reserved} reserved, ${slotsLeft} left)\nReward: ${task.reward}`,
-      Markup.inlineKeyboard([
-        Markup.button.callback('🗑 Delete this task', `deltask_${task.id}`)
-      ])
+      `#${task.id} — ${esc(task.title)}\nStatus: ${task.status}\nSlots: ${task.slots_filled}/${task.slots_total} (${reserved} reserved, ${slotsLeft} left)\nReward: ${task.reward}`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('🗑 Delete this task', `deltask_${task.id}`)
+        ])
+      }
     );
   });
 });
@@ -477,7 +497,7 @@ bot.action(/deltask_(\d+)/, (ctx) => {
   db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('deleted', taskId);
   ctx.answerCbQuery('Task deleted.');
   ctx.editMessageReplyMarkup();
-  ctx.reply(`✅ Task "${task.title}" has been deleted and removed from all listings.`);
+  ctx.reply(`✅ Task "${esc(task.title)}" has been deleted and removed from all listings.`, { parse_mode: 'HTML' });
 });
 
 bot.command('users', (ctx) => {
@@ -487,14 +507,14 @@ bot.command('users', (ctx) => {
 
   let message = `👥 Total users: ${users.length}\n\n`;
   users.forEach(u => {
-    message += `@${u.username} — id: ${u.telegram_id} — balance: ${u.balance}${u.banned ? ' — 🚫 BANNED' : ''}\n`;
+    message += `@${esc(u.username)} — id: ${u.telegram_id} — balance: ${u.balance}${u.banned ? ' — 🚫 BANNED' : ''}\n`;
   });
 
   if (message.length > 4000) {
     const chunks = message.match(/[\s\S]{1,4000}/g);
-    chunks.forEach(chunk => ctx.reply(chunk));
+    chunks.forEach(chunk => ctx.reply(chunk, { parse_mode: 'HTML' }));
   } else {
-    ctx.reply(message);
+    ctx.reply(message, { parse_mode: 'HTML' });
   }
 });
 
@@ -509,10 +529,13 @@ bot.command('withdrawals', (ctx) => {
   if (reqs.length === 0) return ctx.reply('No pending withdrawals.');
   reqs.forEach(r => {
     ctx.reply(
-      `#${r.id} — @${r.username} — ${r.amount}\nWallet: ${r.wallet_address || 'N/A'}`,
-      Markup.inlineKeyboard([
-        Markup.button.callback('✅ Mark Paid', `paid_${r.id}`),
-      ])
+      `#${r.id} — @${esc(r.username)} — ${r.amount}\nWallet: <code>${esc(r.wallet_address || 'N/A')}</code>`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('✅ Mark Paid', `paid_${r.id}`),
+        ])
+      }
     );
   });
 });
@@ -529,7 +552,7 @@ bot.action(/paid_(\d+)/, async (ctx) => {
 
   ctx.answerCbQuery('Marked as paid.');
   ctx.editMessageReplyMarkup();
-  ctx.telegram.sendMessage(user.telegram_id, `💸 Your withdrawal of ${req.amount} has been paid!`).catch(() => {});
+  ctx.telegram.sendMessage(user.telegram_id, `💸 Your withdrawal of ${req.amount} has been paid!`, { parse_mode: 'HTML' }).catch(() => {});
 });
 
 bot.hears('📋 Tasks', (ctx) => {
@@ -549,8 +572,8 @@ bot.hears('📋 Tasks', (ctx) => {
   tasks.forEach(task => {
     const slotsLeft = task.slots_total - task.slots_filled - task.reserved;
     ctx.reply(
-      `📋 ${task.title}\n\n${task.description}\n\n💰 Reward: ${task.reward}\n🎟 Slots left: ${slotsLeft}`,
-      { ...Markup.inlineKeyboard([Markup.button.callback('✅ Do this task', `dotask_${task.id}`)]) }
+      `📋 <b>${esc(task.title)}</b>\n\n${esc(task.description)}\n\n💰 Reward: ${esc(task.reward)}\n🎟 Slots left: ${slotsLeft}`,
+      { parse_mode: 'HTML', ...Markup.inlineKeyboard([Markup.button.callback('✅ Do this task', `dotask_${task.id}`)]) }
     );
   });
 });
