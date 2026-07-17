@@ -468,6 +468,26 @@ bot.command('broadcast', async (ctx) => {
   ctx.reply(`Broadcast sent to ${sent} users. Failed: ${failed}.`);
 });
 
+bot.command('owed', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const users = db.prepare(`SELECT telegram_id, username, balance FROM users WHERE balance > 0 ORDER BY balance DESC`).all();
+
+  if (users.length === 0) return ctx.reply('🎉 Nobody has an outstanding balance right now.');
+
+  const total = users.reduce((sum, u) => sum + u.balance, 0);
+  let message = `💸 People you owe: ${users.length}\n💰 Total owed: ${total.toFixed(2)}\n\n`;
+  users.forEach(u => {
+    message += `@${esc(u.username)} — id: ${u.telegram_id} — ${u.balance}\n`;
+  });
+
+  if (message.length > 4000) {
+    const chunks = message.match(/[\s\S]{1,4000}/g);
+    chunks.forEach(chunk => ctx.reply(chunk, { parse_mode: 'HTML' }));
+  } else {
+    ctx.reply(message, { parse_mode: 'HTML' });
+  }
+});
+
 bot.command('stats', (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
   const targetId = ctx.message.text.split(' ')[1];
