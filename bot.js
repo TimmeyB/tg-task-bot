@@ -12,6 +12,19 @@ if (!BOT_TOKEN) {
 
 const bot = new Telegraf(BOT_TOKEN);
 
+// Ensures the moderation log table exists without needing to touch db.js.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS moderation_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    admin_telegram_id TEXT NOT NULL,
+    target_telegram_id TEXT NOT NULL,
+    target_username TEXT,
+    amount REAL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+`);
+
 function isAdmin(ctx) {
   return ADMIN_IDS.includes(String(ctx.from.id));
 }
@@ -475,9 +488,64 @@ bot.command('owed', (ctx) => {
   if (users.length === 0) return ctx.reply('🎉 Nobody has an outstanding balance right now.');
 
   const total = users.reduce((sum, u) => sum + u.balance, 0);
-  let message = `💸 People you owe: ${users.length}\n💰 Total owed: ${total.toFixed(2)}\n\n`;
+  ctx.reply(`💸 People you owe: ${users.length}\n💰 Total owed: ${total.toFixed(2)}`);
+
   users.forEach(u => {
-    message += `@${esc(u.username)} — id: ${u.telegram_id} — ${u.balance}\n`;
+    ctx.reply(
+      `@${esc(u.username)} — id: ${u.telegram_id} — ${u.balance}`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('🧹 Clear balance', `clearbal_${u.telegram_id}`)
+        ])
+      }
+    );
+  });
+});
+
+bot.action(/clearbal_(\d+)/, (ctx) => {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+  const targetTelegramId = ctx.match[1];
+  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(targetTelegramId);
+  if (!user) return ctx.answerCbQuery('User not found.');
+
+  const previousBalance = user.balance;
+  db.prepare('UPDATE users SET balance = 0 WHERE telegram_id = ?').run(targetTelegramId);
+  db.prepare('INSERT INTO moderation_log (action, admin_telegram_id, target_telegram_id, target_username, amount) VALUES (?, ?, ?, ?, ?)')
+    .run('clear_balance', String(ctx.from.id), String(targetTelegramId), user.username, previousBalance);
+  ctx.answerCbQuery('Balance cleared.');
+  ctx.editMessageText(
+    `@${esc(user.username)} — id: ${user.telegram_id} — 0 (cleared, was ${previousBalance})`,
+    { parse_mode: 'HTML' }
+  );
+});
+
+bot.command('clearbalance', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const targetId = ctx.message.text.split(' ')[1];
+  if (!targetId) return ctx.reply('Usage: /clearbalance <telegram_id>');
+  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(targetId);
+  if (!user) return ctx.reply('User not found.');
+
+  const previousBalance = user.balance;
+  db.prepare('UPDATE users SET balance = 0 WHERE telegram_id = ?').run(targetId);
+  db.prepare('INSERT INTO moderation_log (action, admin_telegram_id, target_telegram_id, target_username, amount) VALUES (?, ?, ?, ?, ?)')
+    .run('clear_balance', String(ctx.from.id), String(targetId), user.username, previousBalance);
+  ctx.reply(
+    `🧹 Balance cleared for @${esc(user.username)} (${targetId}). Was: ${previousBalance} → now: 0.`,
+    { parse_mode: 'HTML' }
+  );
+});
+
+bot.command('clearlog', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const logs = db.prepare(`SELECT * FROM moderation_log ORDER BY id DESC LIMIT 30`).all();
+  if (logs.length === 0) return ctx.reply('No moderation actions logged yet.');
+
+  let message = `📋 Last ${logs.length} moderation action(s):\n\n`;
+  logs.forEach(l => {
+    message += `🧹 Cleared ${l.amount} from @${esc(l.target_username)} (${l.target_telegram_id})\n`;
+    message += `   by admin ${l.admin_telegram_id} — ${l.created_at}\n\n`;
   });
 
   if (message.length > 4000) {
@@ -520,11 +588,18 @@ bot.command('stats', (ctx) => {
 
   const expectedBalance = taskRewardTotal + referralBonusTotal - withdrawalsPaid;
   const diff = Math.round((user.balance - expectedBalance) * 100) / 100;
+  const clearHistory = db.prepare(`SELECT * FROM moderation_log WHERE action = 'clear_balance' AND target_telegram_id = ? ORDER BY id DESC`).all(targetId);
 
   let msg = `📊 Stats for @${esc(user.username)} (id ${user.telegram_id})\n\n`;
   msg += `💰 Current balance: ${user.balance}\n`;
   msg += `🧮 Expected balance: ${expectedBalance.toFixed(2)} `;
-  msg += diff === 0 ? '✅ matches\n' : `⚠️ MISMATCH (off by ${diff > 0 ? '+' : ''}${diff})\n`;
+  if (diff === 0) {
+    msg += '✅ matches\n';
+  } else if (clearHistory.length > 0) {
+    msg += `⚠️ off by ${diff > 0 ? '+' : ''}${diff} — but this user's balance was manually cleared before (see /clearlog), so this is expected.\n`;
+  } else {
+    msg += `⚠️ MISMATCH (off by ${diff > 0 ? '+' : ''}${diff})\n`;
+  }
   msg += `\n✅ Approved tasks: ${completedTasks.length} (total earned: +${taskRewardTotal})\n`;
   completedTasks.forEach(t => {
     msg += `   #${t.task_id} "${esc(t.title)}" — +${t.reward}\n`;
@@ -715,4 +790,3 @@ console.log('Bot is running...');
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
