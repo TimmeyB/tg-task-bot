@@ -3,7 +3,7 @@ const { Telegraf, Markup } = require('telegraf');
 const db = require('./db');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean);
+const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean); 
 
 if (!BOT_TOKEN) {
   console.error('Missing BOT_TOKEN in .env file. Get one from @BotFather.');
