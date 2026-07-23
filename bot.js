@@ -3,7 +3,7 @@ const { Telegraf, Markup } = require('telegraf');
 const db = require('./db');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean); 
+const ADMIN_IDS = (process.env.ADMIN_IDS || '').split(',').map(id => id.trim()).filter(Boolean);
 
 if (!BOT_TOKEN) {
   console.error('Missing BOT_TOKEN in .env file. Get one from @BotFather.');
@@ -22,6 +22,25 @@ db.exec(`
     target_username TEXT,
     amount REAL,
     created_at TEXT DEFAULT (datetime('now'))
+  );
+`);
+
+// Referral bonuses now require admin approval before being paid out.
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN referral_milestones_requested INTEGER DEFAULT 0`);
+} catch (e) {
+  // column already exists
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS referral_bonus_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    milestone_count INTEGER NOT NULL,
+    amount REAL NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
   );
 `);
 
@@ -436,12 +455,27 @@ bot.action(/approve_(\d+)/, async (ctx) => {
       `).get(referrer.telegram_id).count;
 
       const milestonesEarned = Math.floor(activeCount / 10);
-      if (milestonesEarned > referrer.referral_milestones_paid) {
-        const newBonuses = milestonesEarned - referrer.referral_milestones_paid;
-        const bonusAmount = newBonuses * 1;
-        db.prepare('UPDATE users SET balance = balance + ?, referral_milestones_paid = ? WHERE id = ?')
-          .run(bonusAmount, milestonesEarned, referrer.id);
-        ctx.telegram.sendMessage(referrer.telegram_id, `🎉 Referral bonus! You've hit ${milestonesEarned * 10} active referrals — +$${bonusAmount} added to your balance!`).catch(() => {});
+      const alreadyRequested = referrer.referral_milestones_requested || 0;
+      if (milestonesEarned > alreadyRequested) {
+        const newMilestones = milestonesEarned - alreadyRequested;
+        const bonusAmount = newMilestones * 1;
+        db.prepare('UPDATE users SET referral_milestones_requested = ? WHERE id = ?').run(milestonesEarned, referrer.id);
+        const insertResult = db.prepare('INSERT INTO referral_bonus_requests (user_id, milestone_count, amount) VALUES (?, ?, ?)')
+          .run(referrer.id, milestonesEarned, bonusAmount);
+        const requestId = insertResult.lastInsertRowid;
+        for (const adminId of ADMIN_IDS) {
+          ctx.telegram.sendMessage(
+            adminId,
+            `🔗 Referral bonus pending approval\n@${esc(referrer.username)} (id ${referrer.telegram_id}) hit ${milestonesEarned * 10} active referrals\nBonus: +$${bonusAmount}`,
+            {
+              parse_mode: 'HTML',
+              ...Markup.inlineKeyboard([
+                Markup.button.callback('✅ Approve', `refbonus_approve_${requestId}`),
+                Markup.button.callback('❌ Reject', `refbonus_reject_${requestId}`)
+              ])
+            }
+          ).catch(() => {});
+        }
       }
     }
   }
@@ -479,6 +513,62 @@ bot.command('broadcast', async (ctx) => {
     }
   }
   ctx.reply(`Broadcast sent to ${sent} users. Failed: ${failed}.`);
+});
+
+bot.action(/refbonus_approve_(\d+)/, async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+  const reqId = Number(ctx.match[1]);
+  const request = db.prepare('SELECT * FROM referral_bonus_requests WHERE id = ?').get(reqId);
+  if (!request || request.status !== 'pending') return ctx.answerCbQuery('Already handled.');
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(request.user_id);
+  db.prepare('UPDATE referral_bonus_requests SET status = ? WHERE id = ?').run('approved', reqId);
+  db.prepare('UPDATE users SET balance = balance + ?, referral_milestones_paid = ? WHERE id = ?')
+    .run(request.amount, request.milestone_count, user.id);
+
+  ctx.answerCbQuery('Approved!');
+  ctx.editMessageReplyMarkup();
+  ctx.telegram.sendMessage(
+    user.telegram_id,
+    `🎉 Referral bonus approved! You've hit ${request.milestone_count * 10} active referrals — +$${request.amount} added to your balance!`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+});
+
+bot.action(/refbonus_reject_(\d+)/, async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('Not authorized.');
+  const reqId = Number(ctx.match[1]);
+  const request = db.prepare('SELECT * FROM referral_bonus_requests WHERE id = ?').get(reqId);
+  if (!request || request.status !== 'pending') return ctx.answerCbQuery('Already handled.');
+
+  db.prepare('UPDATE referral_bonus_requests SET status = ? WHERE id = ?').run('rejected', reqId);
+  ctx.answerCbQuery('Rejected.');
+  ctx.editMessageReplyMarkup();
+});
+
+bot.command('refbonuses', (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('Not authorized.');
+  const reqs = db.prepare(`
+    SELECT referral_bonus_requests.id, referral_bonus_requests.milestone_count, referral_bonus_requests.amount, users.username, users.telegram_id
+    FROM referral_bonus_requests
+    JOIN users ON referral_bonus_requests.user_id = users.id
+    WHERE referral_bonus_requests.status = 'pending'
+    ORDER BY referral_bonus_requests.id ASC
+  `).all();
+
+  if (reqs.length === 0) return ctx.reply('No pending referral bonuses.');
+  reqs.forEach(r => {
+    ctx.reply(
+      `@${esc(r.username)} (id ${r.telegram_id}) — ${r.milestone_count * 10} active referrals — +$${r.amount}`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          Markup.button.callback('✅ Approve', `refbonus_approve_${r.id}`),
+          Markup.button.callback('❌ Reject', `refbonus_reject_${r.id}`)
+        ])
+      }
+    );
+  });
 });
 
 bot.command('owed', (ctx) => {
